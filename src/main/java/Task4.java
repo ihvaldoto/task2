@@ -1,50 +1,61 @@
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonParseException;
+import com.google.gson.Strictness;
+
+import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.time.Duration;
 
 public class Task4 {
+    private static final URI URL = URI.create("https://httpbin.org/anything");
+    private static final Gson GSON = new GsonBuilder().setStrictness(Strictness.STRICT).create();
 
-    public static void main(String[] args) throws Exception {
-        HttpClient client = HttpClient.newHttpClient();
+    public static void main(String[] args) throws IOException, InterruptedException {
+        System.out.println(fetchAccept());
+    }
 
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create("https://httpbin.org/anything"))
+    static String fetchAccept() throws IOException, InterruptedException {
+        HttpRequest request = HttpRequest.newBuilder(URL)
+                .timeout(Duration.ofSeconds(15))
                 .header("Accept", "application/json")
                 .GET()
                 .build();
 
-        HttpResponse<String> response = client.send(
-                request,
-                HttpResponse.BodyHandlers.ofString()
-        );
+        try (HttpClient client = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(10))
+                .build()) {
+            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() != 200) {
+                throw new IOException("httpbin.org вернул HTTP " + response.statusCode());
+            }
+            return readAccept(response.body());
+        }
+    }
 
-        String body = response.body();
-
-        System.out.println("=== Тело ответа ===");
-        System.out.println(body);
-        System.out.println();
-
-        // Ищем в теле ответа поле "Accept"
-        // httpbin/anything возвращает заголовки запроса в секции "headers"
-        int headersIdx = body.indexOf("\"headers\"");
-        if (headersIdx == -1) {
-            System.out.println("Секция headers не найдена");
-            return;
+    static String readAccept(String body) throws IOException {
+        JsonElement response;
+        try {
+            response = GSON.fromJson(body, JsonElement.class);
+        } catch (JsonParseException e) {
+            throw new IOException("Ответ httpbin.org содержит некорректный JSON", e);
         }
 
-        int acceptIdx = body.indexOf("\"Accept\"", headersIdx);
-        if (acceptIdx == -1) {
-            System.out.println("Заголовок Accept не найден в теле ответа");
-            return;
+        if (response == null || !response.isJsonObject()) {
+            throw new IOException("Ожидался JSON-объект в ответе httpbin.org");
         }
-
-        // Формат: "Accept": "application/json"
-        int valueStart = body.indexOf('"', acceptIdx + 9) + 1;
-        int valueEnd = body.indexOf('"', valueStart);
-        String acceptValue = body.substring(valueStart, valueEnd);
-
-        System.out.println("=== Значение заголовка Accept ===");
-        System.out.println("Accept: " + acceptValue);
+        JsonElement headers = response.getAsJsonObject().get("headers");
+        if (headers == null || !headers.isJsonObject()) {
+            throw new IOException("В ответе httpbin.org отсутствует объект headers");
+        }
+        JsonElement accept = headers.getAsJsonObject().get("Accept");
+        if (accept == null || !accept.isJsonPrimitive() || !accept.getAsJsonPrimitive().isString()) {
+            throw new IOException("В объекте headers отсутствует строковое поле Accept");
+        }
+        return accept.getAsString();
     }
 }
